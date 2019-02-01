@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from argparse import ArgumentParser
 import CloudFlare
+from dns.resolver import Resolver, query
+from dns.exception import DNSException
 import dns
 import json
 import logging
@@ -28,15 +30,15 @@ class CloudFlareHook:
     def _dns_propagated(self, name, token):
         dns_servers = os.environ.get("CF_DNS_SERVERS")
         if dns_servers:
-            resolver = dns.resolver.Resolver()
+            resolver = Resolver()
             resolver.nameservers = dns_servers.split(",")
-            resolver_fn = resolver.query
+            resolver_fn = lambda n: resolver.query(n, "TXT")
         else:
-            resolver_fn = dns.resolver.query
+            resolver_fn = lambda n: query(n, "TXT")
 
         try:
-            response = resolver_fn(name, "TXT")
-        except dns.exception.DNSException as err:
+            response = resolver_fn(name)
+        except DNSException as err:
             self._log.debug("%s. Retrying query...", err)
             return False
 
@@ -119,8 +121,8 @@ class CloudFlareHook:
         self._log.debug("Created _acme-challenge.%s with id %s", domain, result["id"])
 
         while not self._dns_propagated(record_name, token_value):
-            self._log.info("DNS not propagated for %s, waiting 10 seconds...", record_name)
-            time.sleep(10)
+            self._log.info("DNS not propagated for %s, waiting 30 seconds...", record_name)
+            time.sleep(30)
 
     def _clean_challenge(self, domain, token_filename, token_value):
         self._log.debug("Cleaning challenge %s for %s", token_value, domain)
@@ -141,6 +143,9 @@ class CloudFlareHook:
         self._log.info("Deleted TXT record %s", record_name)
 
     def _load_cache(self, fname):
+        if not fname:
+            self._log.debug("Cache disabled")
+            return
         if not os.path.isfile(fname):
             self._log.info("Cache file %s not found", fname)
             return
@@ -154,6 +159,9 @@ class CloudFlareHook:
         self._log.debug("Cache loaded from %s", fname)
 
     def _save_cache(self, fname):
+        if not fname:
+            self._log.debug("Cache disabled.")
+            return
         if not self._cache_changed:
             self._log.debug("Cache has not changed")
             return
